@@ -153,6 +153,9 @@ namespace Kfstorm.LrcParser
             _lyrics = array;
         }
 
+        private static readonly Regex TimestampRegex = new Regex(@"\[(?'minutes'\d+):(?'seconds'\d+(\.\d+)?)\]");
+        private static readonly Regex MetadataRegex = new Regex(@"\[(?'title'.+?):(?'content'.*)\]");
+
         /// <summary>
         /// Create a new new instance of the <see cref="ILrcFile"/> interface with the specified LRC text.
         /// </summary>
@@ -160,6 +163,7 @@ namespace Kfstorm.LrcParser
         /// <returns></returns>
         public static ILrcFile FromText(string lrcText)
         {
+            if (lrcText == null) throw new ArgumentNullException("lrcText");
             var lines = lrcText.Replace(@"\'", "'").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
             var pairs = from line in lines
                 let matches = Regex.Matches(line, @"(?'titles'\[(\d+:\d+(\.\d+)?|(ti|ar|al|by|offset):.*?)\])+(?'content'.+?(?=\[(\d+:\d+(\.\d+)?|(ti|ar|al|by|offset):.*?)\])|.*$)", RegexOptions.None)
@@ -173,17 +177,18 @@ namespace Kfstorm.LrcParser
             foreach (var pair in pairs)
             {
                 // Parse timestamp
-                var match = Regex.Match(pair.Key, @"\[(?'minutes'\d+):(?'seconds'\d+(\.\d+)?)\]", RegexOptions.None);
+                var match = TimestampRegex.Match(pair.Key);
                 if (match.Success)
                 {
-                    int minutes = int.Parse(match.Groups["minutes"].Value);
-                    double seconds = double.Parse(match.Groups["seconds"].Value);
+                    var minutes = int.Parse(match.Groups["minutes"].Value);
+                    var seconds = double.Parse(match.Groups["seconds"].Value);
                     var timestamp = TimeSpan.FromSeconds(minutes * 60 + seconds);
                     lyrics.Add(new OneLineLyric(timestamp, pair.Value));
+                    continue;
                 }
 
                 // Parse metadata
-                match = Regex.Match(pair.Key, @"\[(?'title'.+?):(?'content'.*)\]", RegexOptions.None);
+                match = MetadataRegex.Match(pair.Key);
                 if (match.Success)
                 {
                     var title = match.Groups["title"].Value.ToLower();
@@ -232,6 +237,10 @@ namespace Kfstorm.LrcParser
                 }
             }
 
+            if (lyrics.Count == 0)
+            {
+                throw new ArgumentException("Invalid or empty LRC text. Can't find any lyrics.", "lrcText");
+            }
             return new LrcFile(metadata, lyrics, true);
         }
     }
