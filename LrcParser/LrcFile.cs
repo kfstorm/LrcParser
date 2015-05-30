@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace Kfstorm.LrcParser
@@ -39,7 +40,7 @@ namespace Kfstorm.LrcParser
         /// </value>
         /// <param name="timestamp">The timestamp.</param>
         /// <returns></returns>
-        string ILrcFile.this[TimeSpan timestamp]
+        public string this[TimeSpan timestamp]
         {
             get
             {
@@ -56,7 +57,7 @@ namespace Kfstorm.LrcParser
         /// </value>
         /// <param name="index">The index.</param>
         /// <returns></returns>
-        IOneLineLyric ILrcFile.this[int index]
+        public IOneLineLyric this[int index]
         {
             get { return _lyrics[index]; }
         }
@@ -73,7 +74,7 @@ namespace Kfstorm.LrcParser
             {
                 return index > 0 ? _lyrics[index - 1] : null;
             }
-            index = -index;
+            index = ~index;
             return index > 0 ? _lyrics[index - 1] : null;
         }
 
@@ -86,7 +87,7 @@ namespace Kfstorm.LrcParser
         {
             var index = Array.BinarySearch(_lyrics, new OneLineLyric(timestamp, null), _comparer);
             if (index >= 0) return _lyrics[index];
-            index = -index;
+            index = ~index;
             return index > 0 ? _lyrics[index - 1] : null;
         }
 
@@ -102,7 +103,7 @@ namespace Kfstorm.LrcParser
             {
                 return index + 1 < _lyrics.Length ? _lyrics[index + 1] : null;
             }
-            index = -index;
+            index = ~index;
             return index < _lyrics.Length ? _lyrics[index] : null;
         }
 
@@ -115,7 +116,7 @@ namespace Kfstorm.LrcParser
         {
             var index = Array.BinarySearch(_lyrics, new OneLineLyric(timestamp, null), _comparer);
             if (index >= 0) return _lyrics[index];
-            index = -index;
+            index = ~index;
             return index < _lyrics.Length ? _lyrics[index] : null;
         }
 
@@ -147,14 +148,14 @@ namespace Kfstorm.LrcParser
                 }
                 if (i > 0 && array[i].Timestamp == array[i - 1].Timestamp)
                 {
-                    throw new ArgumentException(string.Format("Found duplicate timestamp '{0}' with lyric '{1}' and '{2}'.", array[i].Timestamp, array[i - 1].Content, array[i].Content), "lyrics");
+                    throw new FormatException(string.Format("Found duplicate timestamp '{0}' with lyric '{1}' and '{2}'.", array[i].Timestamp, array[i - 1].Content, array[i].Content));
                 }
             }
             _lyrics = array;
         }
 
-        private static readonly Regex TimestampRegex = new Regex(@"\[(?'minutes'\d+):(?'seconds'\d+(\.\d+)?)\]");
-        private static readonly Regex MetadataRegex = new Regex(@"\[(?'title'.+?):(?'content'.*)\]");
+        private static readonly Regex TimestampRegex = new Regex(@"^(?'minutes'\d+):(?'seconds'\d+(\.\d+)?)$");
+        private static readonly Regex MetadataRegex = new Regex(@"^(?'title'[A-Za-z]+?):(?'content'.*)$");
 
         /// <summary>
         /// Create a new new instance of the <see cref="ILrcFile"/> interface with the specified LRC text.
@@ -164,13 +165,96 @@ namespace Kfstorm.LrcParser
         public static ILrcFile FromText(string lrcText)
         {
             if (lrcText == null) throw new ArgumentNullException("lrcText");
-            var lines = lrcText.Replace(@"\'", "'").Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            var pairs = from line in lines
-                let matches = Regex.Matches(line, @"(?'titles'\[(\d+:\d+(\.\d+)?|(ti|ar|al|by|offset):.*?)\])+(?'content'.+?(?=\[(\d+:\d+(\.\d+)?|(ti|ar|al|by|offset):.*?)\])|.*$)", RegexOptions.None)
-                from Match match in matches
-                let content = match.Groups["content"].Value
-                from Capture title in match.Groups["titles"].Captures
-                select new KeyValuePair<string, string>(title.Value, content);
+            var pairs = new List<KeyValuePair<string, string>>();
+            var titles = new List<string>();
+            var sb = new StringBuilder();
+
+            // 0: Line start. Expect line ending or [.
+            // 1: Reading title. Expect ] or all characters except line ending.
+            // 2: Reading content. Expect line ending or [ or other charactors.
+            var state = 0;
+            for (var i = 0; i <= lrcText.Length; ++i)
+            {
+                var ended = i >= lrcText.Length;
+                var ch = ended ? (char)0 : lrcText[i];
+                // ReSharper disable once IdentifierTypo
+                var unescaped = false;
+                if (ch == '\\')
+                {
+                    ++i;
+                    ended = i >= lrcText.Length;
+                    if (ended)
+                    {
+                        throw new FormatException("Expect one charactor after '\\' but reaches the end.");
+                    }
+                    ch = lrcText[i];
+                    unescaped = true;
+                }
+
+                switch (state)
+                {
+                    case 0:
+                        if (!unescaped && ch == '[')
+                        {
+                            state = 1;
+                        }
+                        else if (!unescaped && (ch == '\r' || ch == '\n') || ended)
+                        {
+                            state = 0;
+                        }
+                        else
+                        {
+                            throw new FormatException(string.Format("Expect '[' at position {0}", i));
+                        }
+                        break;
+                    case 1:
+                        if (!unescaped && ch == ']')
+                        {
+                            state = 2;
+                            titles.Add(sb.ToString());
+                            sb.Clear();
+                        }
+                        else if (!unescaped && (ch == '\r' || ch == '\n') || ended)
+                        {
+                            throw new FormatException(string.Format("Expect ']' at position {0}", i));
+                        }
+                        else
+                        {
+                            sb.Append(ch); // append to title
+                        }
+                        break;
+                    case 2:
+                        if (!unescaped && (ch == '\r' || ch == '\n') || ended)
+                        {
+                            state = 0;
+                            var content = sb.ToString();
+                            pairs.AddRange(titles.Select(t=>new KeyValuePair<string, string>(t, content)));
+                            sb.Clear();
+                            titles.Clear();
+                        }
+                        else if (!unescaped && ch == '[')
+                        {
+                            if (sb.Length > 0)
+                            {
+                                state = 1;
+                                var content = sb.ToString();
+                                pairs.AddRange(titles.Select(t => new KeyValuePair<string, string>(t, content)));
+                                sb.Clear();
+                                titles.Clear();
+                            }
+                            else
+                            {
+                                state = 1;
+                            }
+                        }
+                        else
+                        {
+                            sb.Append(ch);
+                        }
+                        break;
+                }
+            }
+
             var lyrics = new List<IOneLineLyric>();
             var metadata = new LrcMetadata();
             string offsetString = null;
@@ -197,49 +281,58 @@ namespace Kfstorm.LrcParser
                     {
                         if (metadata.Title != null && content != metadata.Title)
                         {
-                            throw new ArgumentException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "ti", metadata.Title, content), "lrcText");
+                            throw new FormatException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "ti", metadata.Title, content));
                         }
                         metadata.Title = content;
                     }
-                    if (title == "ar")
+                    else if (title == "ar")
                     {
                         if (metadata.Artist != null && content != metadata.Artist)
                         {
-                            throw new ArgumentException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "ar", metadata.Artist, content), "lrcText");
+                            throw new FormatException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "ar", metadata.Artist, content));
                         }
                         metadata.Artist = content;
                     }
-                    if (title == "al")
+                    else if (title == "al")
                     {
                         if (metadata.Album != null && content != metadata.Album)
                         {
-                            throw new ArgumentException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "al", metadata.Album, content), "lrcText");
+                            throw new FormatException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "al", metadata.Album, content));
                         }
                         metadata.Album = content;
                     }
-                    if (title == "by")
+                    else if (title == "by")
                     {
                         if (metadata.Maker != null && content != metadata.Maker)
                         {
-                            throw new ArgumentException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "by", metadata.Maker, content), "lrcText");
+                            throw new FormatException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "by", metadata.Maker, content));
                         }
                         metadata.Maker = content;
                     }
-                    if (title == "offset")
+                    else if (title == "offset")
                     {
                         if (offsetString != null && content != offsetString)
                         {
-                            throw new ArgumentException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "offset", offsetString, content), "lrcText");
+                            throw new FormatException(string.Format("Duplicate LRC metadata found. Metadata name: '{0}', Values: '{1}', '{2}'", "offset", offsetString, content));
                         }
                         offsetString = content;
                         metadata.Offset = TimeSpan.FromMilliseconds(double.Parse(content));
                     }
+                    // ReSharper disable once RedundantIfElseBlock
+                    else
+                    {
+                        // Ingore unsupported tag
+                    }
+                }
+                else
+                {
+                    throw new FormatException(string.Format("Unknown tag [{0}]", pair.Key));
                 }
             }
 
             if (lyrics.Count == 0)
             {
-                throw new ArgumentException("Invalid or empty LRC text. Can't find any lyrics.", "lrcText");
+                throw new FormatException("Invalid or empty LRC text. Can't find any lyrics.");
             }
             return new LrcFile(metadata, lyrics, true);
         }
