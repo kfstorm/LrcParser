@@ -8,7 +8,7 @@
         <projectUrl>https://github.com/kfstorm/LrcParser</projectUrl>
         <requireLicenseAcceptance>false</requireLicenseAcceptance>
         <description>$description$</description>
-        <releaseNotes>Add XML documentation.</releaseNotes>
+        <releaseNotes></releaseNotes>
         <language>en-US</language>
     </metadata>
 </package>
